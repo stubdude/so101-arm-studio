@@ -1,0 +1,3 @@
+-r requirements-demo.txt
+# Official Hiwonder fork, pinned to the revision used for the original setup.
+lerobot[hiwonder,feetech] @ git+https://github.com/Hiwonder-official/hiwonder-SoArm-101.git@a24998f7ba3c77ea445b48c92ad15c14a50e492a
