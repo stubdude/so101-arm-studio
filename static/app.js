@@ -15,7 +15,7 @@ const MODES = {
 const PAGE_NAMES = {operate: 'Operate', sessions: 'Motion sessions', cameras: 'Cameras', learning: 'Learning', settings: 'Robot settings'};
 
 const app = {token: null, modules: [], state: null, online: null, control: 'full', page: 'operate',
-             dismissedError: null, settingsDirty: false, failures: 0,
+             dismissedError: null, settingsDirty: false, deviceDirty: false, failures: 0,
              speeds: null, speedHold: {}};
 
 // ---------- helpers ----------
@@ -60,8 +60,10 @@ async function act(action, body = {}, message) {
     await api('/api/' + action, body);
     if (message) toast(message);
     setTimeout(poll, 60);
+    return true;
   } catch (err) {
     showBanner(err.message);
+    return false;
   }
 }
 
@@ -169,11 +171,30 @@ function usbStatus(s, role) {
   return (s.ports || []).some(p => (serial && p.serial === serial) || (!serial && port && p.device === port)) ? 'USB detected' : 'USB not found';
 }
 
+function renderNextStep(s) {
+  const assigned = ['leader','follower'].every(r => s.profile?.[r]?.serial || s.profile?.[r]?.port);
+  let step;
+  if (s.calibration) step = ['CALIBRATION IN PROGRESS', 'Finish the guided calibration', 'Keep the selected arm supported and follow the instructions in Robot settings.', 'Continue calibration', 'settings'];
+  else if (!assigned) step = ['STEP 1 · SET UP ONCE', 'Identify your leader and follower', 'Connect the USB data cables, then assign each controller in Robot settings. The leader is the arm you move by hand.', 'Set up my arms', 'settings'];
+  else if (!s.connected) step = ['STEP 2 · CONNECT', app.demo ? 'Try your simulated arms' : 'Connect your arms', app.demo ? 'No robot is needed. The simulated follower starts holding. Connect, then try teleoperation and recording.' : 'Clamp both bases, clear the follower’s space, and connect the correct motor power supplies. Connecting reads the motors without starting motion.', 'Connect arms', 'connect'];
+  else if (!s.leader?.calibrated || !s.follower?.calibrated) step = ['STEP 3 · CALIBRATE ONCE', 'Calibrate before you move', 'Open Robot settings and calibrate each arm that needs it. If you already calibrated in LeRobot, use those same calibration names.', 'Open calibration', 'settings'];
+  else if (!s.holding) step = ['STEP 4 · SUPPORT & HOLD', 'Let the follower hold its own weight', 'Support the follower’s forearm in a comfortable pose, enable holding, then ease your hand away once it holds steadily.', 'Enable holding', 'hold'];
+  else if (s.mode === 'teleoperation') step = ['FOLLOWING · KEEP THIS TAB OPEN', 'Move the leader slowly', 'The follower copies your movement. Stop & hold or Escape pauses following while keeping the follower supported by its motors.', 'Stop & hold', 'global-stop'];
+  else step = ['READY TO MOVE', 'Choose a mode, then start', 'Starter makes small movements around your current poses. Full range eases the follower toward the leader’s pose. Keep the follower’s space clear.', 'Start teleoperation', 'start'];
+  setText($('#next-step-label'), step[0]);
+  setText($('#next-step-title'), step[1]);
+  setText($('#next-step-description'), step[2]);
+  setText($('#next-step-action'), step[3]);
+  $('#next-step-action').dataset.target = step[4];
+  $('#next-step-action').disabled = false;
+}
+
 function renderOperate(s) {
   const following = s.mode === 'teleoperation';
   const calibrating = s.mode === 'calibrating';
   const calibrated = s.connected && s.leader?.calibrated && s.follower?.calibrated;
   drawRobot(s);
+  renderNextStep(s);
 
   setText($('#live-tag'), s.connected ? (following ? `LIVE · ${fmt(s.fps, 0)} HZ` : 'LIVE') : 'WAITING FOR CONNECTION');
   const f = s.follower?.positions || {};
@@ -300,6 +321,16 @@ function refreshPreviews() {
 
 function renderSettings(s) {
   const p = s.profile || {};
+  if (app.pendingProfile && ['leader','follower'].every(r => p[r]?.port === app.pendingProfile[r].port && p[r]?.id === app.pendingProfile[r].id) && p.family === app.pendingProfile.family) {
+    app.deviceDirty = false;
+    app.pendingProfile = null;
+    toast('Arm assignments saved. Return to Operate to connect.');
+  }
+  if (app.pendingSettings && p.fps === app.pendingSettings.fps && p.starter_travel === app.pendingSettings.starter_travel) {
+    app.settingsDirty = false;
+    app.pendingSettings = null;
+    toast('Preferences saved.');
+  }
   renderDeviceSetup(s);
   if (!app.settingsDirty) {
     $('#fps-setting').value = p.fps ?? 40;
@@ -342,16 +373,16 @@ function renderSettings(s) {
 
 function renderDeviceSetup(s) {
   const root = $('#device-setup');
-  if (root.contains(document.activeElement)) return;
+  if (app.deviceDirty || root.contains(document.activeElement)) return;
   const p = s.profile || {};
   const options = role => '<option value="">Select USB controller…</option>' + (s.ports || []).map(d => {
     const selected = p[role]?.serial ? d.serial === p[role].serial : d.device === p[role]?.port;
     return `<option value="${esc(d.device)}"${selected ? ' selected' : ''}>${esc(d.description)} · ${esc(d.serial || d.device)}</option>`;
   }).join('');
-  patch(root, `<p class="small">Assign your own controllers before connecting. Unplug one arm at a time if you need to identify them. Keep existing calibration names to reuse saved LeRobot calibration.</p>
+  patch(root, `<p class="small">Assign your own controllers before connecting. To identify the follower: unplug only the leader USB, note the remaining controller below, reconnect the leader, then select each one. The USB list refreshes automatically until you edit a field. Keep existing calibration names to reuse saved LeRobot calibration.</p>
     <div class="device-form"><label>Motor family<select name="family" ${s.connected ? 'disabled' : ''}><option value="hiwonder" ${p.family === 'hiwonder' ? 'selected' : ''}>Hiwonder HX-10HM / HX-30HM</option><option value="feetech" ${p.family === 'feetech' ? 'selected' : ''}>Feetech STS3215 · experimental</option></select></label>
-    ${['leader','follower'].map(role => `<fieldset ${s.connected ? 'disabled' : ''}><legend>${role[0].toUpperCase()+role.slice(1)}</legend><label>USB controller<select name="${role}-port">${options(role)}</select></label><label>Calibration name<input name="${role}-id" value="${esc(p[role]?.id)}" maxlength="60" pattern="[A-Za-z0-9_-]+"></label></fieldset>`).join('')}</div>
-    <button class="button secondary" data-save-profile ${s.connected || app.demo ? 'disabled' : ''}>Save arm assignments</button>
+    ${['leader','follower'].map(role => `<fieldset ${s.connected ? 'disabled' : ''}><legend>${role[0].toUpperCase()+role.slice(1)}</legend><label>USB controller<select name="${role}-port">${options(role)}</select></label><label>Calibration name (keep the default for a new arm)<input name="${role}-id" value="${esc(p[role]?.id)}" maxlength="60" pattern="[A-Za-z0-9_-]+"></label></fieldset>`).join('')}</div>
+    <div class="setup-tools"><button class="button secondary" data-save-profile ${s.connected || app.demo ? 'disabled' : ''}>Save arm assignments</button><button class="button ghost" data-refresh-devices>Discard edits / refresh USB</button></div>
     <p class="small muted">${s.connected ? 'Disconnect USB control to change assignments.' : app.demo ? 'Demo uses simulated devices and never opens USB ports.' : 'Your assignments and recordings stay on this computer.'}</p>`);
 }
 
@@ -438,7 +469,7 @@ async function poll() {
     if (app.failures >= 3 && app.online !== false) {
       app.online = false;
       const banner = $('#error-banner');
-      banner.textContent = 'Cannot reach the local control service. Restart it with “Arm Studio.command”. The follower keeps holding if it was holding.';
+      banner.textContent = 'Cannot reach the local control service. Restart it with the Arm Studio launcher. The follower keeps holding if it was holding.';
       banner.dataset.offline = '1';
       banner.hidden = false;
       setText($('#footer-status'), 'Local control service offline');
@@ -452,6 +483,11 @@ async function poll() {
 // ---------- actions ----------
 function bind() {
   window.addEventListener('hashchange', route);
+  $('#next-step-action').addEventListener('click', e => {
+    const target = e.currentTarget.dataset.target;
+    if (target === 'settings') location.hash = 'settings';
+    else if (target) $('#' + target).click();
+  });
   $('#modal-close').addEventListener('click', () => $('#modal').close());
 
   $('#error-banner').addEventListener('click', e => {
@@ -460,7 +496,7 @@ function bind() {
     e.currentTarget.hidden = true;
   });
 
-  const stop = () => act('stop', {}, 'Stopped. The follower keeps holding.');
+  const stop = () => act('stop', {}, 'Stop requested. Check the control state below.');
   $('#global-stop').addEventListener('click', stop);
   document.addEventListener('keydown', e => { if (e.key === 'Escape') stop(); });
 
@@ -472,7 +508,7 @@ function bind() {
     if (!app.state?.connected) return act('connect', {}, 'Connecting both arms…');
     const ok = await modal({title: 'Disconnect USB control?', confirm: 'Disconnect',
       html: '<p>Following stops and the dashboard lets go of both USB ports. Motor power is not removed. The follower stays holding if it is holding now.</p>'});
-    if (ok) act('disconnect', {}, 'Disconnected.');
+    if (ok) act('disconnect', {}, 'Disconnect requested…');
   });
   $('#disconnect').addEventListener('click', () => $('#connect').click());
 
@@ -487,20 +523,20 @@ function bind() {
     const ok = await modal({eyebrow: 'FOLLOWER', title: 'Enable holding', confirm: 'Hold this pose',
       html: '<p>Support the follower’s forearm in a comfortable pose. It locks where it is when you confirm; then ease your hand away.</p>',
       ack: 'I am supporting the follower.'});
-    if (ok) act('hold', {supported: true}, 'Follower holding.');
+    if (ok) act('hold', {supported: true}, 'Holding requested. Keep supporting until the state says Holding.');
   });
 
   $('#release').addEventListener('click', async () => {
     const ok = await modal({eyebrow: 'FOLLOWER', title: 'Release the follower?', confirm: 'Release motors',
       html: '<p>The follower’s motors go limp and it will fall under its own weight unless supported or resting.</p>',
       ack: 'I am supporting the follower, or it is resting safely.'});
-    if (ok) act('release', {supported: true}, 'Follower released.');
+    if (ok) act('release', {supported: true}, 'Release requested. Keep the follower supported.');
   });
 
   // Sessions
   $('#record-toggle').addEventListener('click', () => {
-    if (app.state?.recording) return act('record_stop', {}, 'Recording saved.');
-    act('record_start', {label: $('#session-label').value}, 'Recording started.');
+    if (app.state?.recording) return act('record_stop', {}, 'Saving recording…');
+    act('record_start', {label: $('#session-label').value}, 'Starting recording…');
     $('#session-label').value = '';
   });
 
@@ -511,7 +547,7 @@ function bind() {
     if (toggle) {
       const role = toggle.dataset.cameraToggle;
       const running = app.state?.cameras?.[role]?.running;
-      return act(running ? 'camera_stop' : 'camera_start', {role}, running ? 'Preview stopped.' : 'Opening camera…');
+      return act(running ? 'camera_stop' : 'camera_start', {role}, running ? 'Stopping preview…' : 'Opening camera…');
     }
     if (edit && !edit.disabled) {
       const role = edit.dataset.cameraEdit;
@@ -525,12 +561,20 @@ function bind() {
           if (!i.checkValidity()) throw new Error(`${i.closest('label').firstChild.textContent.trim()} is out of range.`);
           return [i.name, Number(i.value)];
         }))});
-      if (values) act('camera_save', {role, ...values}, 'Camera profile saved.');
+      if (values) act('camera_save', {role, ...values}, 'Saving camera profile…');
     }
   });
 
   // Settings
-  $('#device-setup').addEventListener('click', e => {
+  $('#device-setup').addEventListener('input', () => { app.deviceDirty = true; });
+  $('#device-setup').addEventListener('change', () => { app.deviceDirty = true; });
+  $('#device-setup').addEventListener('click', async e => {
+    if (e.target.closest('[data-refresh-devices]')) {
+      app.deviceDirty = false;
+      $('#device-setup')._html = null;
+      document.activeElement.blur();
+      return render();
+    }
     if (!e.target.closest('[data-save-profile]')) return;
     const root = $('#device-setup');
     const values = {family: $('[name="family"]', root).value};
@@ -538,20 +582,23 @@ function bind() {
       port: $(`[name="${role}-port"]`, root).value,
       id: $(`[name="${role}-id"]`, root).value,
     };
-    act('profile', values, 'Arm assignments saved.');
+    if (!values.leader.port || !values.follower.port) return toast('Select a USB controller for each arm.');
+    if (values.leader.port === values.follower.port) return toast('Leader and follower need different USB controllers.');
+    if (['leader','follower'].some(r => !/^[A-Za-z0-9_-]{1,60}$/.test(values[r].id))) return toast('Use letters, numbers, underscores or hyphens for calibration names.');
+    if (await act('profile', values, 'Saving arm assignments…')) app.pendingProfile = values;
   });
   ['#fps-setting', '#travel-setting'].forEach(id => $(id).addEventListener('input', () => {
     app.settingsDirty = true;
     syncSliderLabels();
   }));
   $('#save-settings').addEventListener('click', async () => {
-    await act('settings', {fps: +$('#fps-setting').value, starter_travel: +$('#travel-setting').value}, 'Preferences saved.');
-    app.settingsDirty = false;
+    const values = {fps: +$('#fps-setting').value, starter_travel: +$('#travel-setting').value};
+    if (await act('settings', values, 'Saving preferences…')) app.pendingSettings = values;
   });
 
   $('#speed-reset').addEventListener('click', () => {
     JOINTS.forEach(j => { app.speedHold[j] = 0; });
-    act('settings', {joint_speeds: app.speeds.defaults}, 'Speed limits reset to defaults.');
+    act('settings', {joint_speeds: app.speeds.defaults}, 'Resetting speed limits…');
   });
 
   $$('[data-calibrate]').forEach(b => b.addEventListener('click', async () => {
@@ -560,7 +607,7 @@ function bind() {
       html: `<p>The ${role}’s motors are released for calibration, and the saved calibration is replaced when you finish. Cancelling restores the current one.</p>` +
         (role === 'follower' ? '<p>The follower will go limp immediately.</p>' : ''),
       ack: `I am supporting the ${role}.`});
-    if (ok) act('calibrate', {role, supported: true}, `${role[0].toUpperCase() + role.slice(1)} released for calibration.`);
+    if (ok) act('calibrate', {role, supported: true}, `${role[0].toUpperCase() + role.slice(1)} calibration requested. Keep supporting the arm.`);
   }));
   $('#calibration-wizard').addEventListener('click', e => {
     const b = e.target.closest('[data-wizard]');
@@ -579,6 +626,7 @@ async function boot() {
     app.demo = boot.demo;
     app.speeds = boot.speeds;
     buildSpeedPanel();
+    if (!app.demo) setText($('.local-label'), 'LOCAL · REAL ARM CONTROL');
     if (app.demo) {
       setText($('.local-label'), 'DEMO · SIMULATED ARMS');
       setText($('.activity-footer'), 'Demo mode: simulated arms, no USB access.');

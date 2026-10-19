@@ -121,8 +121,11 @@ class Engine:
                 raise
             # Stop must remain available even when ordinary commands fill the queue.
             with self.jobs.mutex:
+                saving = next((job for job in self.jobs.queue if job[2] == 'record_stop'), None)
                 self.jobs.queue.clear()
             self.jobs.put_nowait((0, stamp, action, payload))
+            if saving:
+                self.jobs.put_nowait(saving)
 
     def start_worker(self):
         self.thread = threading.Thread(target=self.run, name='robot-owner', daemon=True)
@@ -135,7 +138,7 @@ class Engine:
                 try:
                     try:
                         _, stamp, action, payload = self.jobs.get_nowait()
-                        if action != 'stop' and stamp < self.cancel_before:
+                        if action not in {'stop', 'record_stop'} and stamp < self.cancel_before:
                             action = None
                     except queue.Empty:
                         action = None

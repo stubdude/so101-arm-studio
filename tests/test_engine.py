@@ -166,6 +166,25 @@ class EngineTest(unittest.TestCase):
             self.engine.closed.set()
             self.engine.thread.join(3)
 
+    def test_stop_does_not_cancel_a_recording_save(self):
+        self.act('connect')
+        self.act('start', {'control':'full'})
+        self.act('record_start', {'label':'stop then save'})
+        self.engine.cycle(time.monotonic())
+        self.engine.submit('record_stop', {})
+        self.engine.submit('stop', {})
+        self.engine.start_worker()
+        try:
+            deadline = time.monotonic() + 2
+            while not self.engine.sessions() and time.monotonic() < deadline:
+                time.sleep(.02)
+            self.assertEqual(self.engine.state['mode'], 'holding')
+            self.assertIsNone(self.engine.state['recording'])
+            self.assertEqual(self.engine.sessions()[0]['label'], 'stop then save')
+        finally:
+            self.engine.closed.set()
+            self.engine.thread.join(3)
+
     def test_settings_validation_and_persistence(self):
         with self.assertRaises(ValueError):
             self.act('settings', {'joint_speeds': {'shoulder_lift': 500}})

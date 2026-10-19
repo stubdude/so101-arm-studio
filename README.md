@@ -4,26 +4,37 @@ A local dashboard for a leader/follower SO-101 setup: teleoperation, live joint 
 
 **Runs on your computer. No account, hosted backend, or cloud connection is needed to operate the arms.**
 
-## Try it without a robot
+## First time: setup, then launch
 
-Install **Python 3.12** and Git, then:
+Install **[Python 3.12](https://www.python.org/downloads/)** first (Windows: enable the Python launcher during installation).
+
+1. [Download the app ZIP](https://github.com/stubdude/so101-arm-studio/archive/refs/heads/main.zip) and extract it to a local folder. Or clone this repository with Git.
+2. **Mac:** open `Setup.command`. **Windows:** open `Setup.bat`. Choose **1 — demo** to try it without a robot, or **2 — real arms** to install hardware support. Real-arm setup also needs [Git](https://git-scm.com/downloads/).
+3. When setup says **Ready**, open **Arm Studio.command** (Mac) or **Arm Studio.bat** (Windows). Keep its terminal window open while using the dashboard.
+4. Follow the **next step** card at the top of Operate. In demo, click **Connect arms → Start teleoperation** (the simulated follower starts holding). Try **Stop & hold** before using real arms.
+
+macOS may ask before opening a downloaded script. If you trust this source, use Finder’s **Open** command; if macOS blocks it, use the terminal commands below. You do not need to disable system security settings.
+
+### Terminal / Linux
 
 ```sh
 git clone https://github.com/stubdude/so101-arm-studio.git
 cd so101-arm-studio
-python3 install.py
-python3 run.py --demo
+python3.12 install.py --interactive
+python3.12 run.py
 ```
 
-On Windows use `py -3.12` instead of `python3`.
+On Windows use `py -3.12` instead of `python3.12`. For unattended demo setup use `python3.12 install.py`; for real arms add `--hardware`.
 
-The browser opens at [127.0.0.1:8765](http://127.0.0.1:8765). Click **Connect arms** to use the simulated pair. Demo mode never opens serial ports or reads your real calibration files. Camera preview is separate and opens a real camera only if you explicitly start it.
+The launcher opens the browser at [127.0.0.1:8765](http://127.0.0.1:8765). A demo-only installation automatically opens demo mode; a hardware installation opens real-arm mode. Add `--demo` to practice after installing hardware, or `--hardware` to require real-arm support explicitly. Stop the current server with **Ctrl+C** before switching modes.
+
+Demo mode never opens serial ports or reads your real calibration files. Camera preview is separate and opens a real camera only if you explicitly start it.
 
 ## Use your own arms
 
 ```sh
-python3 install.py --hardware
-python3 run.py
+python3.12 install.py --hardware
+python3.12 run.py --hardware
 ```
 
 Hardware installation downloads the larger PyTorch/LeRobot stack from the official Hiwonder fork, pinned to a specific revision. It can take several minutes and needs Git and free disk space. The lightweight demo is a good first installation check.
@@ -102,7 +113,7 @@ Read [Architecture and extension points](docs/architecture.md) before adding dat
 
 ## Troubleshooting
 
-- **No USB device:** use a data-capable cable, check the hub and driver, then refresh Robot settings. Devices without serial numbers use their selected port, which can change on reconnection.
+- **No USB device:** use a data-capable cable, check the hub and driver, then use **Discard edits / refresh USB** in Robot settings. Devices without serial numbers use their selected port, which can change on reconnection.
 - **Calibration mismatch:** select the right motor family and existing calibration names, or recalibrate with the arm supported. Do not run motor-ID setup on an assembled, already configured arm without its manufacturer's procedure.
 - **Hardware imports fail:** install the hardware requirements with Python 3.12 and check the platform table. Some Linux camera/video packages also require OS-level video libraries.
 - **Dependency download/build fails:** the hardware stack is pinned, not guaranteed available on every CPU/OS. Keep the error log and open an issue with OS, CPU, Python version, and motor family, without personal paths or device IDs.
